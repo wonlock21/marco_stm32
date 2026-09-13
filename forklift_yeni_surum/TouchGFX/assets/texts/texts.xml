@@ -10,6 +10,12 @@
       </Text>
     </TextGroup>
     <TextGroup Id="Unsorted">
+      <Text Id="__SingleUse_DBUS" Alignment="Left" TypographyId="Default">
+        <Translation Language="GB">&lt;value&gt;</Translation>
+      </Text>
+      <Text Id="__SingleUse_7ISH" Alignment="Left" TypographyId="Default">
+        <Translation Language="GB">R_RPM:</Translation>
+      </Text>
       <Text Id="__SingleUse_VNUT" Alignment="Center" TypographyId="Default">
         <Translation Language="GB"></Translation>
       </Text>
@@ -86,7 +92,7 @@
         <Translation Language="GB">PID VE ARAÇ AYARLARI</Translation>
       </Text>
       <Text Id="__SingleUse_53E7" Alignment="Center" TypographyId="Small">
-        <Translation Language="GB">SÜRÜŞ KONTROLÜ &gt;</Translation>
+        <Translation Language="GB">&#10;SÜRÜŞ KONTROLÜ &gt;</Translation>
       </Text>
       <Text Id="__SingleUse_YL2Q" Alignment="Left" TypographyId="Small">
         <Translation Language="GB">150 cm&lt;value&gt;</Translation>
@@ -119,13 +125,13 @@
         <Translation Language="GB">&lt; SÜRÜŞ KONTROLÜ</Translation>
       </Text>
       <Text Id="__SingleUse_Y0PG" Alignment="Left" TypographyId="Default">
-        <Translation Language="GB">RPM:</Translation>
+        <Translation Language="GB">L_RPM:</Translation>
       </Text>
       <Text Id="__SingleUse_IEMF" Alignment="Left" TypographyId="Default">
         <Translation Language="GB">&lt;value&gt;</Translation>
       </Text>
       <Text Id="__SingleUse_3RHJ" Alignment="Left" TypographyId="Default">
-        <Translation Language="GB">&lt;value&gt;m/s</Translation>
+        <Translation Language="GB">&lt;value&gt;mm/s</Translation>
       </Text>
       <Text Id="__SingleUse_J3EC" Alignment="Left" TypographyId="Default">
         <Translation Language="GB">HIZ:</Translation>

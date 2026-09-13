@@ -14,26 +14,20 @@ static float WrapDegrees(float angle)
     return angle;
 }
 
-#define STATIONARY_ENTER_COUNT   15u
-#define STATIONARY_LEAK_STEP     4u
-#define BIAS_LP_ALPHA            0.02f
-#define ACCEL_GLITCH_MIN_G       0.5f
+/* --- Duraklama tespiti ve bias adaptasyonu için ek ayarlar ---
+ * NOT: is_stationary artik tek ornekte degil, ardisik ornekler uzerinden
+ * histerezisli sekilde karar veriliyor. Bu sayede tek bir gurultulu
+ * ornek (titresim, I2C glitch vb.) bias'i yanlislikla bozamiyor. */
+#define STATIONARY_ENTER_COUNT   15u   /* ~100Hz'de yaklasik 150ms kesintisiz durgunluk iste */
+#define BIAS_LP_ALPHA            0.02f /* eskiden 0.1f -> tek ornegin bias'a etkisini 5 kat azaltir */
+#define ACCEL_GLITCH_MIN_G       0.5f  /* bu araligin disinda accel norm -> muhtemelen bozuk okuma */
 #define ACCEL_GLITCH_MAX_G       1.8f
-#define ACCEL_TRUST_DEADBAND_G   0.05f
+#define ACCEL_TRUST_DEADBAND_G   0.05f /* bu sapmadan sonra accel'e guveni kademeli azalt */
 
-#define GYRO_LPF_ALPHA           0.35f
-
-#define MPU_READ_SOFT_RETRY_COUNT 2u
-#define BUS_RECOVERY_MAX_EXTRAPOLATE_S 0.15f
-
-static float   s_last_good_gx = 0.0f;
-static float   s_last_good_gy = 0.0f;
-static float   s_last_good_gz = 0.0f;
-static uint8_t s_pending_bus_recovery = 0;
-
-static uint16_t s_stationary_count  = 0;
-static float    s_gyro_filt[3]      = {0.0f, 0.0f, 0.0f};
-static uint8_t  s_gyro_filt_init    = 0;
+/* Tek global IMU_Fusion_t ornegi varsayimiyla static sayac kullaniliyor.
+ * Eger birden fazla IMU_Fusion_t ornegi paralel calisiyorsa bu sayaci
+ * struct'a tasiyip (orn. f->stationary_count) header'a eklemek gerekir. */
+static uint16_t s_stationary_count = 0;
 
 void Fusion_Init(IMU_Fusion_t *f)
 {
@@ -50,24 +44,15 @@ void Fusion_Init(IMU_Fusion_t *f)
     f->last_us      = 0;
     f->first_update = 1;
 
+    /* Drift'i önlemek için eşik değeri daha hassas seviyeye çekildi */
     f->stationary_gyro_thresh_dps = 1.0f;
     f->stationary_accel_tol_g     = 0.15f;
-}
-
-void Fusion_NotifyBusReset(IMU_Fusion_t *f)
-{
-    f->first_update        = 1;
-    s_gyro_filt_init       = 0;
-    s_pending_bus_recovery = 1;
 }
 
 HAL_StatusTypeDef Fusion_CalibrateGyroBias(IMU_Fusion_t *f, MPU9250_HandleTypeDef *mpu,
                                             uint16_t samples)
 {
     if (samples == 0) return HAL_ERROR;
-
-#define CALIB_OUTLIER_MIN_SAMPLES 5u
-#define CALIB_OUTLIER_THRESH_DPS  3.0f
 
     float sum[3] = {0.0f, 0.0f, 0.0f};
     float accel_sum[3] = {0.0f, 0.0f, 0.0f};
@@ -77,34 +62,15 @@ HAL_StatusTypeDef Fusion_CalibrateGyroBias(IMU_Fusion_t *f, MPU9250_HandleTypeDe
     {
         if (MPU9250_ReadAll(mpu) == HAL_OK)
         {
-            float g[3] = { mpu->gyro_dps[0], mpu->gyro_dps[1], mpu->gyro_dps[2] };
-            uint8_t is_outlier = 0;
+            sum[0] += mpu->gyro_dps[0];
+            sum[1] += mpu->gyro_dps[1];
+            sum[2] += mpu->gyro_dps[2];
 
-            if (ok_count >= CALIB_OUTLIER_MIN_SAMPLES)
-            {
-                for (int a = 0; a < 3; a++)
-                {
-                    float running_mean = sum[a] / ok_count;
-                    if (fabsf(g[a] - running_mean) > CALIB_OUTLIER_THRESH_DPS)
-                    {
-                        is_outlier = 1;
-                        break;
-                    }
-                }
-            }
+            accel_sum[0] += mpu->accel_g[0];
+            accel_sum[1] += mpu->accel_g[1];
+            accel_sum[2] += mpu->accel_g[2];
 
-            if (!is_outlier)
-            {
-                sum[0] += g[0];
-                sum[1] += g[1];
-                sum[2] += g[2];
-
-                accel_sum[0] += mpu->accel_g[0];
-                accel_sum[1] += mpu->accel_g[1];
-                accel_sum[2] += mpu->accel_g[2];
-
-                ok_count++;
-            }
+            ok_count++;
         }
         HAL_Delay(5);
     }
@@ -123,80 +89,43 @@ HAL_StatusTypeDef Fusion_CalibrateGyroBias(IMU_Fusion_t *f, MPU9250_HandleTypeDe
     f->pitch = RAD2DEG(atan2f(-ax, sqrtf(ay * ay + az * az)));
     f->yaw   = 0.0f;
 
-    f->first_update = 1;
+    f->first_update = 1; /* İlk update için zaman referansını tazeleyecek */
 
     return HAL_OK;
 }
 
+/* Dikkat: Fonksiyona mikro saniye cinsinden zaman parametresi eklendi */
 HAL_StatusTypeDef Fusion_Update(IMU_Fusion_t *f, MPU9250_HandleTypeDef *mpu, uint32_t current_us)
 {
     HAL_StatusTypeDef status = MPU9250_ReadAll(mpu);
-
-    if (status != HAL_OK)
-    {
-        for (uint8_t retry = 0; retry < MPU_READ_SOFT_RETRY_COUNT && status != HAL_OK; retry++)
-        {
-            status = MPU9250_ReadAll(mpu);
-        }
-        if (status != HAL_OK) return status;
-    }
+    if (status != HAL_OK) return status;
 
     if (f->first_update)
     {
-        if (s_pending_bus_recovery)
-        {
-            float gap_dt = (float)(current_us - f->last_us) / 1000000.0f;
-            if (gap_dt > 0.0f)
-            {
-                if (gap_dt > BUS_RECOVERY_MAX_EXTRAPOLATE_S)
-                {
-                    gap_dt = BUS_RECOVERY_MAX_EXTRAPOLATE_S;
-                }
-
-                f->roll  = f->roll  + s_last_good_gx * gap_dt;
-                f->pitch = f->pitch + s_last_good_gy * gap_dt;
-                f->yaw   = WrapDegrees(f->yaw + s_last_good_gz * gap_dt);
-            }
-            s_pending_bus_recovery = 0;
-        }
-
         f->last_us      = current_us;
         f->first_update = 0;
         return HAL_OK;
     }
 
+    /* Mikro saniyeyi saniyeye çevir (Daha yüksek dt hassasiyeti) */
     float dt = (float)(current_us - f->last_us) / 1000000.0f;
     f->last_us = current_us;
 
-    if (dt <= 0.0f) return HAL_OK;
-    if (dt > 0.5f)  dt = 0.02f;
-
-    float raw_g[3] = { mpu->gyro_dps[0], mpu->gyro_dps[1], mpu->gyro_dps[2] };
-
-    if (!s_gyro_filt_init)
+    if (dt <= 0.0f)
     {
-        s_gyro_filt[0] = raw_g[0];
-        s_gyro_filt[1] = raw_g[1];
-        s_gyro_filt[2] = raw_g[2];
-        s_gyro_filt_init = 1;
-    }
-    else
-    {
-        for (int a = 0; a < 3; a++)
-        {
-            // AGV motor jerk/titreşimlerinde verinin çöpe atılmasını önlemek için
-            // katı sınır reddi kaldırıldı, doğrudan LPF uygulanıyor:
-            s_gyro_filt[a] += GYRO_LPF_ALPHA * (raw_g[a] - s_gyro_filt[a]);
-        }
+        return HAL_OK;
     }
 
-    float gx = s_gyro_filt[0] - f->gyro_bias[0];
-    float gy = s_gyro_filt[1] - f->gyro_bias[1];
-    float gz = s_gyro_filt[2] - f->gyro_bias[2];
+    if (dt > 0.5f)
+    {
+        dt = 0.02f; /* Kesinti durumunda güvenli varsayılan periyot */
+    }
 
-    s_last_good_gx = gx;
-    s_last_good_gy = gy;
-    s_last_good_gz = gz;
+    /* Bias'ı çıkar */
+    float gx = mpu->gyro_dps[0] - f->gyro_bias[0];
+    float gy = mpu->gyro_dps[1] - f->gyro_bias[1];
+    float gz = mpu->gyro_dps[2] - f->gyro_bias[2];
+
 
     float ax = mpu->accel_g[0];
     float ay = mpu->accel_g[1];
@@ -204,6 +133,10 @@ HAL_StatusTypeDef Fusion_Update(IMU_Fusion_t *f, MPU9250_HandleTypeDef *mpu, uin
 
     float accel_norm = sqrtf(ax*ax + ay*ay + az*az);
 
+    /* --- I2C/veri glitch koruması ---
+     * accel_norm 1g'den çok uzaksa bu ya sert bir çarpışma/vuruş ya da
+     * bozuk bir okumadır. İkisinde de accel'e güvenmeyip sadece gyro ile
+     * entegrasyona devam ediyoruz; bias adaptasyonuna da hiç girmiyoruz. */
     if (accel_norm < ACCEL_GLITCH_MIN_G || accel_norm > ACCEL_GLITCH_MAX_G)
     {
         f->roll  = f->roll  + gx * dt;
@@ -212,9 +145,15 @@ HAL_StatusTypeDef Fusion_Update(IMU_Fusion_t *f, MPU9250_HandleTypeDef *mpu, uin
         return HAL_OK;
     }
 
+    /* --- Accel'den roll/pitch --- */
     float roll_acc  = RAD2DEG(atan2f(ay, az));
     float pitch_acc = RAD2DEG(atan2f(-ax, sqrtf(ay * ay + az * az)));
 
+    /* --- Complementary filter (adaptif alpha) ---
+     * accel_norm 1g'den saptıkça (araç hızlanıyor/sarsılıyor demektir)
+     * accel'e olan güveni kademeli azaltıp gyro'ya kaydırıyoruz. Bu,
+     * sert hareketlerde roll/pitch'in "drag" yapmasını (yanlış accel
+     * verisinin karışmasını) engeller. */
     float accel_err = fabsf(accel_norm - 1.0f);
     float dyn_alpha = f->alpha;
     if (accel_err > ACCEL_TRUST_DEADBAND_G)
@@ -228,20 +167,20 @@ HAL_StatusTypeDef Fusion_Update(IMU_Fusion_t *f, MPU9250_HandleTypeDef *mpu, uin
     float roll_gyro  = f->roll  + gx * dt;
     float pitch_gyro = f->pitch + gy * dt;
 
-    float roll_err  = WrapDegrees(roll_acc  - roll_gyro);
-    float pitch_err = WrapDegrees(pitch_acc - pitch_gyro);
+    f->roll  = dyn_alpha * roll_gyro  + (1.0f - dyn_alpha) * roll_acc;
+    f->pitch = dyn_alpha * pitch_gyro + (1.0f - dyn_alpha) * pitch_acc;
 
-    f->roll  = WrapDegrees(roll_gyro  + (1.0f - dyn_alpha) * roll_err);
-    f->pitch = pitch_gyro + (1.0f - dyn_alpha) * pitch_err;
-    f->yaw   = WrapDegrees(f->yaw + gz * dt);
+    /* --- Yaw --- */
+    f->yaw = WrapDegrees(f->yaw + gz * dt);
 
+    /* --- HAREKETSIZLIK TESPİTİ VE BIAS ADAPTASYONU ---
+     * Histerezisli: yalnızca ardışık STATIONARY_ENTER_COUNT örnek boyunca
+     * kesintisiz "duruyor" koşulu sağlanırsa bias güncellemesi başlar.
+     * Tek bir gürültülü örnek artık ne bias'ı bozabiliyor ne de yanlış
+     * pozitif üretebiliyor; en ufak harekette sayaç anında sıfırlanır. */
     float gyro_norm = sqrtf(gx*gx + gy*gy + gz*gz);
-    float raw_gyro_norm = sqrtf(s_gyro_filt[0]*s_gyro_filt[0] +
-                                s_gyro_filt[1]*s_gyro_filt[1] +
-                                s_gyro_filt[2]*s_gyro_filt[2]);
 
     uint8_t raw_stationary =
-        (raw_gyro_norm < (f->stationary_gyro_thresh_dps + 2.0f)) &&
         (gyro_norm < f->stationary_gyro_thresh_dps) &&
         (accel_err < f->stationary_accel_tol_g);
 
@@ -251,34 +190,37 @@ HAL_StatusTypeDef Fusion_Update(IMU_Fusion_t *f, MPU9250_HandleTypeDef *mpu, uin
     }
     else
     {
-        if (s_stationary_count > STATIONARY_LEAK_STEP) s_stationary_count -= STATIONARY_LEAK_STEP;
-        else                                            s_stationary_count = 0;
+        s_stationary_count = 0;
     }
 
     if (s_stationary_count >= STATIONARY_ENTER_COUNT)
     {
-        f->gyro_bias[0] += BIAS_LP_ALPHA * (s_gyro_filt[0] - f->gyro_bias[0]);
-        f->gyro_bias[1] += BIAS_LP_ALPHA * (s_gyro_filt[1] - f->gyro_bias[1]);
-        f->gyro_bias[2] += BIAS_LP_ALPHA * (s_gyro_filt[2] - f->gyro_bias[2]);
-
-        float max_bias = 4.0f;
-        for (int i = 0; i < 3; i++) {
-            if (f->gyro_bias[i] > max_bias) f->gyro_bias[i] = max_bias;
-            if (f->gyro_bias[i] < -max_bias) f->gyro_bias[i] = -max_bias;
-        }
+        /* Yavaş, düşük geçişli adaptasyon: tek örneğin bias üzerindeki
+         * etkisi eskiye göre 5 kat küçük, bu yüzden gürültü bias'ı
+         * artık rastgele yürütmüyor (0.01 derecelik yavaş kayma buradan
+         * geliyordu). */
+        f->gyro_bias[0] += BIAS_LP_ALPHA * (mpu->gyro_dps[0] - f->gyro_bias[0]);
+        f->gyro_bias[1] += BIAS_LP_ALPHA * (mpu->gyro_dps[1] - f->gyro_bias[1]);
+        f->gyro_bias[2] += BIAS_LP_ALPHA * (mpu->gyro_dps[2] - f->gyro_bias[2]);
     }
 
     return HAL_OK;
 }
 
-#define ANGLE_REACT_DEADBAND_DEG   1.0f
+/* --- MİNİMUM HAREKET TESPİTİ (DEADBAND) ENTEGRASYONU --- */
 
+#define ANGLE_REACT_DEADBAND_DEG   1.0f  /* İstenilen genişlik */
+
+/* Son "raporlanan/tepki verilen" açı — sadece deadband aşıldığında güncellenir.
+ * NOT: Tıpkı s_stationary_count gibi, bu değişkenler de tekil IMU
+ * varsayımıyla static olarak tanımlanmıştır. */
 static float s_last_reported_roll  = 0.0f;
 static float s_last_reported_pitch = 0.0f;
 static float s_last_reported_yaw   = 0.0f;
 
 float Fusion_GetReportedRoll(const IMU_Fusion_t *f)
 {
+    /* Roll değeri atan2f kaynaklı -180/+180 arasında sarmalama yapabilir */
     float diff = WrapDegrees(f->roll - s_last_reported_roll);
 
     if (fabsf(diff) >= ANGLE_REACT_DEADBAND_DEG)
@@ -290,6 +232,8 @@ float Fusion_GetReportedRoll(const IMU_Fusion_t *f)
 
 float Fusion_GetReportedPitch(const IMU_Fusion_t *f)
 {
+    /* Pitch değeri atan2f(-ax, sqrt(ay^2+az^2)) ile -90/+90 aralığıyla
+     * sınırlı olduğundan sarmalama (wrap) yapmaz, direkt fark alınabilir. */
     if (fabsf(f->pitch - s_last_reported_pitch) >= ANGLE_REACT_DEADBAND_DEG)
     {
         s_last_reported_pitch = f->pitch;
@@ -299,6 +243,8 @@ float Fusion_GetReportedPitch(const IMU_Fusion_t *f)
 
 float Fusion_GetReportedYaw(const IMU_Fusion_t *f)
 {
+    /* Yaw değeri WrapDegrees ile sürekli -180/+180 aralığında tutulduğundan
+     * fark hesabı sınır geçişlerinde düzeltilmelidir. */
     float diff = WrapDegrees(f->yaw - s_last_reported_yaw);
 
     if (fabsf(diff) >= ANGLE_REACT_DEADBAND_DEG)

@@ -1,5 +1,8 @@
 #include <gui/drivescreen_screen/DriveScreenView.hpp>
 #include <touchgfx/Color.hpp>
+extern "C" {
+#include "motor_control.h"
+}
 
 DriveScreenView::DriveScreenView() {}
 
@@ -18,6 +21,25 @@ void DriveScreenView::handleTickEvent()
 {
     DriveScreenViewBase::handleTickEvent();
     updateBackgroundColor();
+
+    float left_rpm = MotorControl_GetLeftRpm();
+    float right_rpm = MotorControl_GetRightRpm();
+    float left_mms = MotorControl_GetRightMeasuredMmPs();
+    float right_mms = MotorControl_GetLeftMeasuredMmPs();
+    float absolute_speed = (left_mms + right_mms) / 2;
+
+    Unicode::snprintfFloat(txtRpmValueBuffer, TXTRPMVALUE_SIZE, "%.1f", left_rpm);
+    txtRpmValue.setWildcard(txtRpmValueBuffer);
+    txtRpmValue.invalidate();
+
+    Unicode::snprintfFloat(txtRpmValue_1Buffer, TXTRPMVALUE_SIZE, "%.1f", right_rpm);
+    txtRpmValue.setWildcard(txtRpmValue_1Buffer);
+    txtRpmValue.invalidate();
+
+    Unicode::snprintfFloat(txtSpeedValueBuffer, TXTRPMVALUE_SIZE, "%.1f", absolute_speed);
+    txtRpmValue.setWildcard(txtSpeedValueBuffer);
+    txtRpmValue.invalidate();
+
 }
 
 void DriveScreenView::stopButtonClicked()

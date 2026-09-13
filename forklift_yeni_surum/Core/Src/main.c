@@ -116,7 +116,7 @@ osThreadId_t TouchGFXTaskHandle;
 const osThreadAttr_t TouchGFXTask_attributes = {
   .name = "TouchGFXTask",
   .stack_size = 4096 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for videoTask */
 osThreadId_t videoTaskHandle;
@@ -137,7 +137,7 @@ osThreadId_t imuTaskHandle;
 const osThreadAttr_t imuTask_attributes = {
   .name = "imuTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
 /* Definitions for aht10Task */
@@ -153,7 +153,7 @@ osThreadId_t protocolTaskHandle;
 const osThreadAttr_t protocolTask_attributes = {
   .name = "protocolTask",
   .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 
 osThreadId_t batteryTaskHandle;
@@ -845,7 +845,7 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 19;
+  htim1.Init.Prescaler = 39;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim1.Init.Period = 255;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -1645,7 +1645,6 @@ void StartImuTask(void *argument)
         error_count = 0;
 
         MPU9250_I2C_Hard_Reset(&hi2c1);
-        Fusion_NotifyBusReset(&imu_fusion);
 
         hi2c1.ErrorCode = HAL_I2C_ERROR_NONE;
         hi2c1.State = HAL_I2C_STATE_READY;

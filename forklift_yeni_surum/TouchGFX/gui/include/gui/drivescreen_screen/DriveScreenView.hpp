@@ -17,6 +17,10 @@ public:
     virtual void updateBackgroundColor();
 
 protected:
+    static const uint16_t TXTRPMVALUE_SIZE = 10;
+    touchgfx::Unicode::UnicodeChar txtRpmValueBuffer[TXTRPMVALUE_SIZE];
+    touchgfx::Unicode::UnicodeChar txtRpmValue_1Buffer[TXTRPMVALUE_SIZE];
+    touchgfx::Unicode::UnicodeChar txtSpeedValueBuffer[TXTRPMVALUE_SIZE];
 };
 
 #endif // DRIVESCREENVIEW_HPP

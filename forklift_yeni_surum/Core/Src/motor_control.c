@@ -36,7 +36,7 @@ extern TIM_HandleTypeDef htim12;  /* Sağ Motor İleri (D11 PB15) */
 #define PWM_SLEW_STEP                       40
 
 /* Hız Rampası Parametreleri (RPM cinsinden) */
-#define RAMP_UP_DURATION_MS                150U
+#define RAMP_UP_DURATION_MS                100U
 #define EXP_RAMP_K                         1.50f//2.00f
 
 #define RAMP_DOWN_DURATION_MS               90U
