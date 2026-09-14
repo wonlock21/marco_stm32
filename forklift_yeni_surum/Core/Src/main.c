@@ -1813,10 +1813,18 @@ void StartProtocolTask(void *argument)
       // IMU'yu ayrı bir taskte veya DMA/Interrupt ile güncelleyip buraya sadece
       // anlık 'imu_fusion.yaw' değerini okutmalısın.
 
+      int32_t left_ticks_snapshot;
+      int32_t right_ticks_snapshot;
+      uint32_t primask = __get_PRIMASK();
+      __disable_irq();
+      left_ticks_snapshot = MotorControl_GetLeftOdoTicks();
+      right_ticks_snapshot = MotorControl_GetRightOdoTicks();
+      if (primask == 0U) __enable_irq();
+
       StateOdometry_t reply_odo = {
           .timestamp_us = (uint64_t)current_tick * 1000,
-          .left_ticks   = MotorControl_GetLeftOdoTicks(),
-          .right_ticks  = -1 * MotorControl_GetRightOdoTicks(),
+          .left_ticks   = left_ticks_snapshot,
+          .right_ticks  = -1 * right_ticks_snapshot,
           .left_speed   = MotorControl_GetLeftMeasuredMmPs(),
           .right_speed  = -MotorControl_GetRightMeasuredMmPs(),
           .imu_yaw      = g_shared_imu_yaw

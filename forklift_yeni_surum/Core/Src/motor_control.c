@@ -126,6 +126,8 @@ static WheelControl_t right_wheel = { .kp = RIGHT_KP, .ki = RIGHT_KI, .kd = RIGH
 
 static volatile MotorDirection_t left_motor_direction = MOTOR_DIR_STOP;
 static volatile MotorDirection_t right_motor_direction = MOTOR_DIR_STOP;
+static volatile MotorDirection_t left_odometry_direction = MOTOR_DIR_STOP;
+static volatile MotorDirection_t right_odometry_direction = MOTOR_DIR_STOP;
 static volatile uint8_t control_enabled = 0U;
 static volatile uint8_t command_clamped = 0U;
 
@@ -421,7 +423,7 @@ static void ProcessStopRamp(uint32_t now_tick)
         uint32_t elapsed = now_tick - right_wheel.ramp.start_tick;
         float stop_rpm = CalculateExponentialRamp(right_wheel.ramp.start_rpm, 0.0f, elapsed, RAMP_DOWN_DURATION_MS);
 
-        if ((elapsed >= RAMP_DOWN_DURATION_MS) || (stop_rpm < 2.0f))
+        if ((elapsed >= RAMP_DOWN_DURATION_MS) || (stop_rpm < 0.1f))
         {
             FinishSingleWheelStop(&right_wheel, &right_motor_direction, &right_target_rpm_command, RightMotor_Apply);
         }
@@ -503,7 +505,7 @@ void MotorControl_EncoderExtiCallback(uint16_t gpio_pin)
         left_wheel.last_encoder_us = now_us;
         left_wheel.pulse_count++;
 
-        if (left_motor_direction == MOTOR_DIR_REVERSE) left_odo_ticks--;
+        if (left_odometry_direction == MOTOR_DIR_REVERSE) left_odo_ticks--;
         else left_odo_ticks++;
     }
     else if (gpio_pin == RIGHT_ENCODER_Pin)
@@ -521,7 +523,7 @@ void MotorControl_EncoderExtiCallback(uint16_t gpio_pin)
         right_wheel.last_encoder_us = now_us;
         right_wheel.pulse_count++;
 
-        if (right_motor_direction == MOTOR_DIR_FORWARD) right_odo_ticks++;
+        if (right_odometry_direction == MOTOR_DIR_FORWARD) right_odo_ticks++;
         else right_odo_ticks--;
     }
 }
@@ -555,6 +557,7 @@ void MotorControl_SafeStop(void)
 static void SetSingleWheelTarget(WheelControl_t *wheel,
                                  float signed_rpm_cmd,
                                  volatile MotorDirection_t *motor_direction,
+                                 volatile MotorDirection_t *odometry_direction,
                                  volatile float *target_rpm_command,
                                  void (*motor_apply)(MotorDirection_t, uint16_t),
                                  uint32_t now_tick)
@@ -609,6 +612,7 @@ static void SetSingleWheelTarget(WheelControl_t *wheel,
         }
 
         *motor_direction = requested_direction;
+        *odometry_direction = requested_direction;
         wheel->integral_pwm = 0.0f;
         wheel->p_term = 0.0f;
         wheel->d_term = 0.0f;
@@ -625,6 +629,7 @@ static void SetSingleWheelTarget(WheelControl_t *wheel,
     else
     {
         *motor_direction = requested_direction;
+        *odometry_direction = requested_direction;
         wheel->ramp.start_rpm = wheel->target_rpm;
         wheel->ramp.target_rpm_cmd = target_magnitude;
         wheel->ramp.start_tick = now_tick;
@@ -638,8 +643,8 @@ void MotorControl_SetTargetRpm(float left_signed_rpm, float right_signed_rpm)
     uint8_t was_running = control_enabled;
     command_clamped = 0U;
 
-    SetSingleWheelTarget(&left_wheel, left_signed_rpm, &left_motor_direction, &left_target_rpm_command, LeftMotor_Apply, now_tick);
-    SetSingleWheelTarget(&right_wheel, right_signed_rpm, &right_motor_direction, &right_target_rpm_command, RightMotor_Apply, now_tick);
+    SetSingleWheelTarget(&left_wheel, left_signed_rpm, &left_motor_direction, &left_odometry_direction, &left_target_rpm_command, LeftMotor_Apply, now_tick);
+    SetSingleWheelTarget(&right_wheel, right_signed_rpm, &right_motor_direction, &right_odometry_direction, &right_target_rpm_command, RightMotor_Apply, now_tick);
 
     if ((left_motor_direction == MOTOR_DIR_STOP) && (right_motor_direction == MOTOR_DIR_STOP) &&
         (left_wheel.ramp.stop_active == 0U) && (right_wheel.ramp.stop_active == 0U))
@@ -868,7 +873,7 @@ int16_t MotorControl_GetLeftMeasuredMmPs(void)
 {
     float rpm_mmps = ClampFloat(RPM_TO_MMPS(left_wheel.filtered_rpm), 0.0f, 32767.0f);
     int16_t measured_mmps = (int16_t)lroundf(rpm_mmps);
-    if (left_motor_direction == MOTOR_DIR_REVERSE) {
+    if (left_odometry_direction == MOTOR_DIR_REVERSE) {
         return -measured_mmps;
     }
     return measured_mmps;
@@ -878,7 +883,7 @@ int16_t MotorControl_GetRightMeasuredMmPs(void)
 {
     float rpm_mmps = ClampFloat(RPM_TO_MMPS(right_wheel.filtered_rpm), 0.0f, 32767.0f);
     int16_t measured_mmps = (int16_t)lroundf(rpm_mmps);
-    if (right_motor_direction == MOTOR_DIR_REVERSE) {
+    if (right_odometry_direction == MOTOR_DIR_REVERSE) {
         return -measured_mmps;
     }
     return measured_mmps;
