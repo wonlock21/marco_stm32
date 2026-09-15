@@ -177,7 +177,7 @@ static volatile bool soft_estop_latched = false;
 
 /* Fiziksel mod anahtari eklenene kadar Bluetooth komutu zaman asimina ugrar. */
 #define MANUAL_COMMAND_TIMEOUT_MS 300U
-//static volatile uint32_t manual_last_command_tick = 0U;
+static volatile uint32_t manual_last_command_tick = 0U;
 
 // Orange Pi binary protokolu
 ProtocolHandler_t g_protocol;
@@ -1574,11 +1574,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     // USART6 (Bluetooth / HC-06) - manuel kontrol
     if (huart->Instance == USART6)
     {
-        if (UartCom_BluetoothRxCallback(huart, &command))
+        bool drive_packet_received = false;
+        UartCom_BluetoothRxCallback(huart, &command, &drive_packet_received);
+
+        if (drive_packet_received)
         {
+            manual_last_command_tick = HAL_GetTick();
             left_target = command.left_pwm;
             right_target = command.right_pwm;
-            //manual_last_command_tick = HAL_GetTick();
         }
     }
 }
@@ -1924,6 +1927,13 @@ void StartDefaultTask(void *argument)
 	  float final_left = 0.0f;
 	  float final_right = 0.0f;
       uint32_t now_tick = HAL_GetTick();
+
+      if (((left_target != 0) || (right_target != 0)) &&
+          ((now_tick - manual_last_command_tick) >= MANUAL_COMMAND_TIMEOUT_MS))
+      {
+          left_target = 0;
+          right_target = 0;
+      }
 
       /* ---- KONTROL YONETICISI (MUX) ---- */
       // Oncelik 1: Yazilimsal acil durus butun kaynaklari engeller.

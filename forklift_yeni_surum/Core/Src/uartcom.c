@@ -436,15 +436,20 @@ bool UartCom_RxCallback(UART_HandleTypeDef *huart, MotorTargetCommand_t *command
 // ==========================================
 // BLUETOOTH (HC-06) VERİLERİNİ DİNLEME VE AYIRMA KISMI
 // ==========================================
-bool UartCom_BluetoothRxCallback(UART_HandleTypeDef *huart, MotorTargetCommand_t *command)
+bool UartCom_BluetoothRxCallback(UART_HandleTypeDef *huart,
+                                 MotorTargetCommand_t *command,
+                                 bool *drive_packet_received)
 {
     bool command_ready = false;
     MotorTargetCommand_t parsed_command;
 
-    if ((huart == NULL) || (command == NULL) || (bluetooth_uart_handle == NULL))
+    if ((huart == NULL) || (command == NULL) ||
+        (drive_packet_received == NULL) || (bluetooth_uart_handle == NULL))
     {
         return false;
     }
+
+    *drive_packet_received = false;
 
     if (huart->Instance != bluetooth_uart_handle->Instance)
     {
@@ -458,11 +463,15 @@ bool UartCom_BluetoothRxCallback(UART_HandleTypeDef *huart, MotorTargetCommand_t
         {
             bluetooth_rx_buffer[bluetooth_rx_index] = '\0';
 
-            if (ParseBluetoothCommand(bluetooth_rx_buffer, &parsed_command) &&
-                IsCommandChanged(&parsed_command))
+            if (ParseBluetoothCommand(bluetooth_rx_buffer, &parsed_command))
             {
                 *command = parsed_command;
-                command_ready = true;
+                *drive_packet_received = true;
+
+                if (IsCommandChanged(&parsed_command))
+                {
+                    command_ready = true;
+                }
             }
         }
 

@@ -15,6 +15,8 @@ void UartCom_Init(UART_HandleTypeDef *huart);
 void UartCom_BluetoothInit(UART_HandleTypeDef *huart);
 
 bool UartCom_RxCallback(UART_HandleTypeDef *huart, MotorTargetCommand_t *command);
-bool UartCom_BluetoothRxCallback(UART_HandleTypeDef *huart, MotorTargetCommand_t *command);
+bool UartCom_BluetoothRxCallback(UART_HandleTypeDef *huart,
+                                 MotorTargetCommand_t *command,
+                                 bool *drive_packet_received);
 
 #endif /* INC_UARTCOM_H_ */
