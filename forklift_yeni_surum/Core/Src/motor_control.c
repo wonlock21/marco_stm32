@@ -69,6 +69,8 @@ extern TIM_HandleTypeDef htim12;  /* Sağ Motor İleri (D11 PB15) */
 #define ENCODER_FILTER_INTERVAL_RATIO         0.05f
 #define ENCODER_FILTER_MIN_US                  5U
 #define ENCODER_FILTER_MAX_US               1000U
+#define REVERSAL_STOP_CONFIRM_MIN_US       100000U
+#define REVERSAL_STOP_CONFIRM_MAX_US       500000U
 
 typedef enum
 {
@@ -94,6 +96,7 @@ typedef struct
     volatile uint32_t rejected_count;
     volatile uint32_t last_encoder_us;
     volatile uint32_t current_delta_us; /* İki pulse arası ölçülen hassas süre[cite: 1] */
+    volatile uint32_t last_valid_encoder_delta_us;
 
     uint32_t previous_control_count;
     uint32_t dynamic_filter_us;
@@ -117,6 +120,8 @@ typedef struct
 
     int32_t base_pwm;
     int32_t applied_pwm;
+    uint8_t reversal_pending;
+    float pending_signed_rpm;
 
     WheelRamp_t ramp;
 } WheelControl_t;
@@ -502,6 +507,7 @@ void MotorControl_EncoderExtiCallback(uint16_t gpio_pin)
         }
 
         left_wheel.current_delta_us = delta;
+        left_wheel.last_valid_encoder_delta_us = delta;
         left_wheel.last_encoder_us = now_us;
         left_wheel.pulse_count++;
 
@@ -520,6 +526,7 @@ void MotorControl_EncoderExtiCallback(uint16_t gpio_pin)
         }
 
         right_wheel.current_delta_us = delta;
+        right_wheel.last_valid_encoder_delta_us = delta;
         right_wheel.last_encoder_us = now_us;
         right_wheel.pulse_count++;
 
@@ -549,6 +556,10 @@ void MotorControl_Init(void)
 
 void MotorControl_SafeStop(void)
 {
+    left_wheel.reversal_pending = 0U;
+    left_wheel.pending_signed_rpm = 0.0f;
+    right_wheel.reversal_pending = 0U;
+    right_wheel.pending_signed_rpm = 0.0f;
     FinishMotorStop();
 }
 
@@ -566,6 +577,26 @@ static void SetSingleWheelTarget(WheelControl_t *wheel,
     signed_rpm_cmd = ClampFloat(signed_rpm_cmd, -MAX_TARGET_RPM, MAX_TARGET_RPM);
     if (fabsf(signed_rpm_cmd - original_rpm_cmd) > 0.001f) command_clamped = 1U;
     uint8_t wheel_was_running = (*motor_direction != MOTOR_DIR_STOP) ? 1U : 0U;
+
+    if (wheel->reversal_pending != 0U)
+    {
+        if (fabsf(signed_rpm_cmd) < 0.1f)
+        {
+            wheel->pending_signed_rpm = 0.0f;
+        }
+        else
+        {
+            if (fabsf(signed_rpm_cmd) < MIN_COMMAND_RPM)
+            {
+                signed_rpm_cmd = (signed_rpm_cmd > 0.0f) ? MIN_COMMAND_RPM : -MIN_COMMAND_RPM;
+                command_clamped = 1U;
+            }
+            wheel->pending_signed_rpm = signed_rpm_cmd;
+        }
+
+        *target_rpm_command = 0.0f;
+        return;
+    }
 
     if (fabsf(signed_rpm_cmd) < 0.1f)
     {
@@ -601,6 +632,26 @@ static void SetSingleWheelTarget(WheelControl_t *wheel,
     float target_magnitude = fabsf(signed_rpm_cmd);
     uint8_t direction_changed = (requested_direction != *motor_direction) ? 1U : 0U;
 
+    if ((wheel_was_running != 0U) && (direction_changed != 0U))
+    {
+        wheel->reversal_pending = 1U;
+        wheel->pending_signed_rpm = signed_rpm_cmd;
+        *target_rpm_command = 0.0f;
+
+        if (wheel->ramp.stop_active == 0U)
+        {
+            wheel->ramp.start_rpm = wheel->target_rpm;
+            wheel->ramp.start_tick = now_tick;
+            wheel->ramp.active = 0U;
+            wheel->ramp.stop_active = 1U;
+
+            wheel->integral_pwm = 0.0f;
+            wheel->p_term = 0.0f;
+            wheel->d_term = 0.0f;
+        }
+        return;
+    }
+
     *target_rpm_command = signed_rpm_cmd;
     wheel->ramp.stop_active = 0U;
 
@@ -634,6 +685,95 @@ static void SetSingleWheelTarget(WheelControl_t *wheel,
         wheel->ramp.target_rpm_cmd = target_magnitude;
         wheel->ramp.start_tick = now_tick;
         wheel->ramp.active = 1U;
+    }
+}
+
+static uint32_t CalculateReversalStopConfirmUs(uint32_t last_valid_delta_us)
+{
+    if (last_valid_delta_us > (REVERSAL_STOP_CONFIRM_MAX_US / 3U))
+    {
+        return REVERSAL_STOP_CONFIRM_MAX_US;
+    }
+
+    uint32_t stop_confirm_us = 3U * last_valid_delta_us;
+    if (stop_confirm_us < REVERSAL_STOP_CONFIRM_MIN_US)
+    {
+        return REVERSAL_STOP_CONFIRM_MIN_US;
+    }
+    return stop_confirm_us;
+}
+
+static uint8_t ProcessSingleWheelReversal(WheelControl_t *wheel,
+                                          volatile MotorDirection_t *motor_direction,
+                                          volatile MotorDirection_t *odometry_direction,
+                                          volatile float *target_rpm_command,
+                                          void (*motor_apply)(MotorDirection_t, uint16_t),
+                                          uint32_t now_tick)
+{
+    if ((wheel->reversal_pending == 0U) || (wheel->applied_pwm != 0))
+    {
+        return 0U;
+    }
+
+    uint32_t last_encoder_us;
+    uint32_t last_valid_delta_us;
+    uint32_t encoder_silence_us;
+    __disable_irq();
+    last_encoder_us = wheel->last_encoder_us;
+    last_valid_delta_us = wheel->last_valid_encoder_delta_us;
+    encoder_silence_us = __HAL_TIM_GET_COUNTER(&htim2) - last_encoder_us;
+    __enable_irq();
+
+    uint32_t stop_confirm_us = CalculateReversalStopConfirmUs(last_valid_delta_us);
+    if (encoder_silence_us < stop_confirm_us)
+    {
+        return 0U;
+    }
+
+    float pending_signed_rpm = wheel->pending_signed_rpm;
+    wheel->reversal_pending = 0U;
+    wheel->pending_signed_rpm = 0.0f;
+
+    if (fabsf(pending_signed_rpm) < 0.1f)
+    {
+        *target_rpm_command = 0.0f;
+        return 0U;
+    }
+
+    SetSingleWheelTarget(wheel, pending_signed_rpm, motor_direction,
+                         odometry_direction, target_rpm_command,
+                         motor_apply, now_tick);
+    return 1U;
+}
+
+static void ProcessPendingReversals(uint32_t now_tick)
+{
+    uint8_t wheel_restarted = 0U;
+
+    wheel_restarted |= ProcessSingleWheelReversal(&left_wheel,
+                                                  &left_motor_direction,
+                                                  &left_odometry_direction,
+                                                  &left_target_rpm_command,
+                                                  LeftMotor_Apply,
+                                                  now_tick);
+    wheel_restarted |= ProcessSingleWheelReversal(&right_wheel,
+                                                  &right_motor_direction,
+                                                  &right_odometry_direction,
+                                                  &right_target_rpm_command,
+                                                  RightMotor_Apply,
+                                                  now_tick);
+
+    if (wheel_restarted != 0U)
+    {
+        __disable_irq();
+        left_sync_origin = left_wheel.pulse_count;
+        right_sync_origin = right_wheel.pulse_count;
+        __enable_irq();
+
+        UpdateDynamicFilters((left_wheel.target_rpm > right_wheel.target_rpm) ? left_wheel.target_rpm : right_wheel.target_rpm);
+        last_control_tick = now_tick;
+        MotorDriver_Enable();
+        control_enabled = 1U;
     }
 }
 
@@ -725,6 +865,8 @@ static void ProcessClosedLoop(void)
     {
         ProcessStopRamp(now_tick);
     }
+
+    ProcessPendingReversals(now_tick);
 
     uint32_t current_control_period = GetDynamicControlPeriod();
 
