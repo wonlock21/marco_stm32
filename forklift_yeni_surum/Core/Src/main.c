@@ -1743,20 +1743,39 @@ void StartProtocolTask(void *argument)
 
       switch (action)
       {
-        case 0:
+        case FORK_ACTION_STOP:
           LiftLineer_Stop();
+          EgimLineer_Stop();
           fork_timeout_active = false;
           BuzzerControl_SetMode(BUZZER_MODE_SILENT);
           break;
-        case 1:
+        case FORK_ACTION_UP:
+          EgimLineer_Stop();
           LiftLineer_Up(LIFT_DEFAULT_SPEED);
           fork_action_start_tick = current_tick;
           fork_active_timeout_ms = timeout_ms;
           fork_timeout_active    = (timeout_ms > 0U);
           BuzzerControl_SetMode(BUZZER_MODE_LOAD_PICKUP);
           break;
-        case 2:
+        case FORK_ACTION_DOWN:
+          EgimLineer_Stop();
           LiftLineer_Down(LIFT_DEFAULT_SPEED);
+          fork_action_start_tick = current_tick;
+          fork_active_timeout_ms = timeout_ms;
+          fork_timeout_active    = (timeout_ms > 0U);
+          BuzzerControl_SetMode(BUZZER_MODE_LOAD_DROP);
+          break;
+        case FORK_ACTION_TILT_UP:
+          LiftLineer_Stop();
+          EgimLineer_Up(EGIM_DEFAULT_SPEED);
+          fork_action_start_tick = current_tick;
+          fork_active_timeout_ms = timeout_ms;
+          fork_timeout_active    = (timeout_ms > 0U);
+          BuzzerControl_SetMode(BUZZER_MODE_SILENT);
+          break;
+        case FORK_ACTION_TILT_DOWN:
+          LiftLineer_Stop();
+          EgimLineer_Down(EGIM_DEFAULT_SPEED);
           fork_action_start_tick = current_tick;
           fork_active_timeout_ms = timeout_ms;
           fork_timeout_active    = (timeout_ms > 0U);
@@ -1764,6 +1783,7 @@ void StartProtocolTask(void *argument)
           break;
         default:
           LiftLineer_Stop();
+          EgimLineer_Stop();
           fork_timeout_active = false;
           BuzzerControl_SetMode(BUZZER_MODE_SILENT);
           break;
@@ -1773,6 +1793,7 @@ void StartProtocolTask(void *argument)
     if (fork_timeout_active && ((current_tick - fork_action_start_tick) >= fork_active_timeout_ms))
     {
       LiftLineer_Stop();
+      EgimLineer_Stop();
       fork_timeout_active = false;
     }
 
@@ -1795,6 +1816,7 @@ void StartProtocolTask(void *argument)
           opi_left_target = 0.0f;
           opi_right_target = 0.0f;
           LiftLineer_Stop();
+          EgimLineer_Stop();
           fork_timeout_active = false;
       }
       else if (safety_command.command == 2U) /* CLEAR_FAULT */

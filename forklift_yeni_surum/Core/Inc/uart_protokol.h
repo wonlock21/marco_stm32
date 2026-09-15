@@ -17,6 +17,12 @@
 #define MSG_STATE_ODOMETRY     0x81
 #define MSG_STATE_STATUS       0x82
 
+#define FORK_ACTION_STOP       0U
+#define FORK_ACTION_UP         1U
+#define FORK_ACTION_DOWN       2U
+#define FORK_ACTION_TILT_UP    3U
+#define FORK_ACTION_TILT_DOWN  4U
+
 // Watchdog zaman aşımı (spec §5)
 #define WATCHDOG_TIMEOUT_MS    200
 
