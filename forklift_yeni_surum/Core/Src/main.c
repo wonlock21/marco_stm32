@@ -1406,7 +1406,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LCD_DISP_GPIO_Port, LCD_DISP_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_7|MCU_ACTIVE_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_7, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOF, GPIO_PIN_7|GPIO_PIN_6|GPIO_PIN_8, GPIO_PIN_RESET);
@@ -1451,12 +1451,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : MCU_ACTIVE_Pin */
-  GPIO_InitStruct.Pin = MCU_ACTIVE_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  HAL_GPIO_Init(MCU_ACTIVE_GPIO_Port, &GPIO_InitStruct);
+  /*Configure GPIO pin : LOAD_DETECTED_Pin */
+  GPIO_InitStruct.Pin = LOAD_DETECTED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(LOAD_DETECTED_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PF7 PF6 PF8 */
   GPIO_InitStruct.Pin = GPIO_PIN_7|GPIO_PIN_6|GPIO_PIN_8;
@@ -1795,6 +1794,8 @@ void StartProtocolTask(void *argument)
           soft_estop_latched = true;
           opi_left_target = 0.0f;
           opi_right_target = 0.0f;
+          LiftLineer_Stop();
+          fork_timeout_active = false;
       }
       else if (safety_command.command == 2U) /* CLEAR_FAULT */
       {
@@ -1853,6 +1854,10 @@ void StartProtocolTask(void *argument)
           if (g_protocol.watchdog_triggered) status_flags |= STATUS_FLAG_WATCHDOG_TRIGGERED;
           if (MotorControl_WasCommandClamped()) status_flags |= STATUS_FLAG_CMD_CLAMPED;
           if (MotorControl_HasEncoderFault()) status_flags |= STATUS_FLAG_ENCODER_FAULT;
+          if (HAL_GPIO_ReadPin(LOAD_DETECTED_GPIO_Port, LOAD_DETECTED_Pin) == GPIO_PIN_SET)
+          {
+              status_flags |= STATUS_FLAG_LOAD_DETECTED;
+          }
 
           // Akım değerini (amper) miliampere çevirerek protokole yüklüyoruz
           int16_t akim_ma = (int16_t)(g_forklift_akim * 1000.0f);

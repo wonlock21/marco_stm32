@@ -33,6 +33,7 @@
 #define STATUS_FLAG_WATCHDOG_TRIGGERED  (1 << 6)
 #define STATUS_FLAG_CMD_CLAMPED         (1 << 7)
 #define STATUS_FLAG_ENCODER_FAULT       (1 << 8)
+#define STATUS_FLAG_LOAD_DETECTED       (1 << 9)
 
 // İletişim Modları
 typedef enum {

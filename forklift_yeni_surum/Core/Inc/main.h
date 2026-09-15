@@ -64,8 +64,8 @@ void Error_Handler(void);
 #define LCD_BL_CTRL_GPIO_Port GPIOK
 #define LCD_DISP_Pin GPIO_PIN_12
 #define LCD_DISP_GPIO_Port GPIOI
-#define MCU_ACTIVE_Pin GPIO_PIN_6
-#define MCU_ACTIVE_GPIO_Port GPIOG
+#define LOAD_DETECTED_Pin GPIO_PIN_6
+#define LOAD_DETECTED_GPIO_Port GPIOG
 
 /* USER CODE BEGIN Private defines */
 

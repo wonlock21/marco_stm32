@@ -42,7 +42,6 @@
 // VSYNC_FREQ  - Pin PB4(D3).
 // RENDER_TIME - Pin PC6(D1)
 // FRAME_RATE  - Pin PC7(D0)
-// MCU_ACTIVE  - Pin PG6(D2)
 /* USER CODE END user includes */
 
 using namespace touchgfx;
