@@ -2,17 +2,30 @@
 
 float ACS712_ReadCurrent(ADC_HandleTypeDef *hadc) {
     uint32_t total_adc = 0;
+    uint32_t valid_samples = 0;
     const int num_samples = 100;
 
     // Arka arkaya 100 kez oku ve topla
     for(int i = 0; i < num_samples; i++) {
-        HAL_ADC_Start(hadc);
-        HAL_ADC_PollForConversion(hadc, HAL_MAX_DELAY);
+        if (HAL_ADC_Start(hadc) != HAL_OK) {
+            break;
+        }
+
+        if (HAL_ADC_PollForConversion(hadc, 5U) != HAL_OK) {
+            HAL_ADC_Stop(hadc);
+            break;
+        }
+
         total_adc += HAL_ADC_GetValue(hadc);
+        valid_samples++;
+    }
+
+    if (valid_samples == 0U) {
+        return 0.0f;
     }
 
     // Ortalamayı bul
-    uint32_t adc_raw = total_adc / num_samples;
+    uint32_t adc_raw = total_adc / valid_samples;
 
     // Voltaj ve Akım Hesaplamaları
     float v_adc = (adc_raw * 3.3f) / 4095.0f;
