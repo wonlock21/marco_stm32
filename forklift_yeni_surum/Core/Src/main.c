@@ -176,7 +176,7 @@ volatile float opi_right_target = 0.0f;
 static volatile bool soft_estop_latched = false;
 
 /* Fiziksel mod anahtari eklenene kadar Bluetooth komutu zaman asimina ugrar. */
-#define MANUAL_COMMAND_TIMEOUT_MS 300U
+#define MANUAL_COMMAND_TIMEOUT_MS 500U
 static volatile uint32_t manual_last_command_tick = 0U;
 
 // Orange Pi binary protokolu
