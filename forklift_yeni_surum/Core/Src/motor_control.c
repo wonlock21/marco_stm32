@@ -801,11 +801,13 @@ void MotorControl_SetTargetRpm(float left_signed_rpm, float right_signed_rpm)
         return;
     }
 
-    if (was_running == 0U) Encoder_Reset(0U);
+    if (was_running == 0U)
+    {
+        Encoder_Reset(0U);
+        last_control_tick = now_tick;
+    }
 
     UpdateDynamicFilters((left_wheel.target_rpm > right_wheel.target_rpm) ? left_wheel.target_rpm : right_wheel.target_rpm);
-
-    last_control_tick = now_tick;
     MotorDriver_Enable();
     control_enabled = 1U;
 }
