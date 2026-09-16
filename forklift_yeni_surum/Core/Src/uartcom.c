@@ -440,6 +440,14 @@ bool UartCom_BluetoothRxCallback(UART_HandleTypeDef *huart,
                                  MotorTargetCommand_t *command,
                                  bool *drive_packet_received)
 {
+	extern bool g_is_autonomous_mode;
+	if (g_is_autonomous_mode)
+	{
+	   bluetooth_rx_index = 0U;
+	   memset(bluetooth_rx_buffer, 0, sizeof(bluetooth_rx_buffer));
+	   RestartBluetoothReception();
+	   return false;
+	}
     bool command_ready = false;
     MotorTargetCommand_t parsed_command;
 

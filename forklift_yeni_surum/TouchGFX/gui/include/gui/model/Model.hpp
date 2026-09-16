@@ -13,7 +13,7 @@ public:
     void tick();
 
     bool isAutonomousMode() const { return isAutonomous; }
-    void setAutonomousMode(bool autoMode) { isAutonomous = autoMode; }
+    void setAutonomousMode(bool autoMode);
 
     bool isEmergency() const { return emergencyStop; }
     void setEmergency(bool em) { emergencyStop = em; }

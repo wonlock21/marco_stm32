@@ -195,6 +195,8 @@ IMU_Fusion_t          imu_fusion;
 bool                  imu_is_ready = false;
 volatile float g_shared_imu_yaw = NAN;
 
+
+extern bool g_is_autonomous_mode;
 /*AHT10_HandleTypedef aht10_sensor;
 volatile float g_aht10_temperature = 0.0f;
 volatile float g_aht10_humidity = 0.0f;
@@ -1868,7 +1870,8 @@ void StartProtocolTask(void *argument)
           g_forklift_akim = ACS712_ReadCurrent(&hadc3);
 
           uint16_t status_flags = 0U;
-          bool manual_active = ((left_target != 0) || (right_target != 0));
+
+          bool manual_active=!g_is_autonomous_mode;
 
           if (soft_estop_latched) status_flags |= STATUS_FLAG_ESTOP_ACTIVE;
           if (manual_active) status_flags |= STATUS_FLAG_MODE_MANUAL;
