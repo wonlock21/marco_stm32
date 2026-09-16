@@ -24,7 +24,7 @@ extern TIM_HandleTypeDef htim12;  /* Sağ Motor İleri (D11 PB15) */
 #define LEFT_ENCODER_PPR                   360U
 #define RIGHT_ENCODER_PPR                  360U
 
-#define WHEEL_DIAMETER_MM                  200.0f
+#define WHEEL_DIAMETER_MM                  250.0f
 #define WHEEL_CIRCUMFERENCE_MM             (WHEEL_DIAMETER_MM * 3.14159265f)
 #define RPM_TO_MMPS(rpm)                   ((rpm) * WHEEL_CIRCUMFERENCE_MM / 60.0f)
 
@@ -57,6 +57,9 @@ extern TIM_HandleTypeDef htim12;  /* Sağ Motor İleri (D11 PB15) */
 #define SYNC_COUNT_KP                         0.25f  /* Agresif senkronizasyon kazancı[cite: 1] */
 #define SYNC_CORRECTION_LIMIT                35.0f   /* Genişletilmiş düzeltme marjı[cite: 1] */
 #define SYNC_COUNT_DEADBAND                    1U    /* Sıfıra yakın tolerans[cite: 1] */
+#define STRAIGHT_SYNC_ENTER_RPM_DIFF           0.15f
+#define STRAIGHT_SYNC_EXIT_RPM_DIFF            0.30f
+#define STRAIGHT_SYNC_TARGET_RATIO              0.20f
 
 #define INTEGRAL_PWM_MIN                   (-150.0f)
 #define INTEGRAL_PWM_Max                    150.0f
@@ -139,7 +142,7 @@ static volatile uint8_t command_clamped = 0U;
 volatile float left_target_rpm_command = 0.0f;
 volatile float right_target_rpm_command = 0.0f;
 
-/* Duz surus senkronizasyonu her yeni komutta bu tabandan baslar.[cite: 1] */
+static bool straight_sync_active = false;
 static uint32_t left_sync_origin = 0U;
 static uint32_t right_sync_origin = 0U;
 
@@ -199,6 +202,14 @@ static int32_t SlewLimit(int32_t current, int32_t requested, int32_t step)
 static float ApplyDeadband(float error)
 {
     return (fabsf(error) <= RPM_ERROR_DEADBAND) ? 0.0f : error;
+}
+
+static bool ShouldUseStraightSync(bool was_active, float magnitude_diff,
+                                  bool direction_eligible)
+{
+    if (!direction_eligible) return false;
+    if (was_active) return magnitude_diff < STRAIGHT_SYNC_EXIT_RPM_DIFF;
+    return magnitude_diff <= STRAIGHT_SYNC_ENTER_RPM_DIFF;
 }
 
 static float CalculateFeedForwardPwm(float target_rpm)
@@ -379,6 +390,7 @@ static void ResetWheelControl(WheelControl_t *wheel)
 static void FinishMotorStop(void)
 {
     control_enabled = 0U;
+    straight_sync_active = false;
     left_target_rpm_command = 0.0f;
     right_target_rpm_command = 0.0f;
     left_motor_direction = MOTOR_DIR_STOP;
@@ -394,6 +406,7 @@ static void FinishMotorStop(void)
 
 static void FinishSingleWheelStop(WheelControl_t *wheel, volatile MotorDirection_t *dir, volatile float *target_cmd, void (*motor_apply)(MotorDirection_t, uint16_t))
 {
+    straight_sync_active = false;
     *target_cmd = 0.0f;
     *dir = MOTOR_DIR_STOP;
     ResetWheelControl(wheel);
@@ -765,11 +778,6 @@ static void ProcessPendingReversals(uint32_t now_tick)
 
     if (wheel_restarted != 0U)
     {
-        __disable_irq();
-        left_sync_origin = left_wheel.pulse_count;
-        right_sync_origin = right_wheel.pulse_count;
-        __enable_irq();
-
         UpdateDynamicFilters((left_wheel.target_rpm > right_wheel.target_rpm) ? left_wheel.target_rpm : right_wheel.target_rpm);
         last_control_tick = now_tick;
         MotorDriver_Enable();
@@ -794,11 +802,6 @@ void MotorControl_SetTargetRpm(float left_signed_rpm, float right_signed_rpm)
     }
 
     if (was_running == 0U) Encoder_Reset(0U);
-
-    __disable_irq();
-    left_sync_origin = left_wheel.pulse_count;
-    right_sync_origin = right_wheel.pulse_count;
-    __enable_irq();
 
     UpdateDynamicFilters((left_wheel.target_rpm > right_wheel.target_rpm) ? left_wheel.target_rpm : right_wheel.target_rpm);
 
@@ -902,21 +905,38 @@ static void ProcessClosedLoop(void)
     float control_left_target_rpm  = left_wheel.target_rpm;
     float control_right_target_rpm = right_wheel.target_rpm;
 
-    bool is_straight_driving = (magnitude_diff <= 5.0f) &&
-                               (left_motor_direction != MOTOR_DIR_STOP) &&
-                               (right_motor_direction != MOTOR_DIR_STOP) &&
-                               (left_motor_direction != right_motor_direction);
+    bool direction_eligible = (left_motor_direction != MOTOR_DIR_STOP) &&
+                              (right_motor_direction != MOTOR_DIR_STOP) &&
+                              (left_motor_direction != right_motor_direction);
+    bool was_straight_sync_active = straight_sync_active;
+    straight_sync_active = ShouldUseStraightSync(straight_sync_active,
+                                                 magnitude_diff,
+                                                 direction_eligible);
 
-    if (is_straight_driving)
+    if ((!was_straight_sync_active) && straight_sync_active)
+    {
+        left_sync_origin = left_count;
+        right_sync_origin = right_count;
+    }
+
+    if (straight_sync_active)
     {
         uint32_t left_progress = left_count - left_sync_origin;
         uint32_t right_progress = right_count - right_sync_origin;
         int32_t count_diff = (int32_t)left_progress - (int32_t)right_progress;
+        float average_target_rpm = 0.5f * (control_left_target_rpm +
+                                           control_right_target_rpm);
+        float dynamic_sync_limit = average_target_rpm * STRAIGHT_SYNC_TARGET_RATIO;
+        if (dynamic_sync_limit > SYNC_CORRECTION_LIMIT)
+        {
+            dynamic_sync_limit = SYNC_CORRECTION_LIMIT;
+        }
 
-        if (labs(count_diff) > SYNC_COUNT_DEADBAND)
+        if ((labs(count_diff) > SYNC_COUNT_DEADBAND) &&
+            (dynamic_sync_limit > 0.0f))
         {
             float rpm_trim = (float)count_diff * SYNC_COUNT_KP;
-            rpm_trim = ClampFloat(rpm_trim, -SYNC_CORRECTION_LIMIT, SYNC_CORRECTION_LIMIT);
+            rpm_trim = ClampFloat(rpm_trim, -dynamic_sync_limit, dynamic_sync_limit);
 
             control_left_target_rpm  -= rpm_trim;
             control_right_target_rpm += rpm_trim;
