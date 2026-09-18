@@ -28,7 +28,9 @@ extern TIM_HandleTypeDef htim12;  /* Sağ Motor İleri (D11 PB15) */
 #define WHEEL_CIRCUMFERENCE_MM             (WHEEL_DIAMETER_MM * 3.14159265f)
 #define RPM_TO_MMPS(rpm)                   ((rpm) * WHEEL_CIRCUMFERENCE_MM / 60.0f)
 
-#define ENCODER_TIMEOUT_COUNTS              3U
+#define ENCODER_MEASUREMENT_TIMEOUT_FACTOR  2.5f
+#define ENCODER_MEASUREMENT_TIMEOUT_MIN_US  100000U
+#define ENCODER_MEASUREMENT_TIMEOUT_MAX_US 2000000U
 
 #define CONTROL_PERIOD_MS                   10U
 #define TELEMETRY_PERIOD_MS                500U
@@ -119,7 +121,7 @@ typedef struct
     float integral_pwm;
     float d_term;
 
-    uint8_t zero_pulse_count;
+    uint8_t measurement_timed_out;
 
     int32_t base_pwm;
     int32_t applied_pwm;
@@ -234,10 +236,32 @@ static uint32_t CalculateDynamicEncoderFilterUs(float target_rpm, uint32_t ppr)
     return (uint32_t)(ClampFloat(filter_us, (float)ENCODER_FILTER_MIN_US, (float)ENCODER_FILTER_MAX_US) + 0.5f);
 }
 
-static void UpdateDynamicFilters(float target_rpm)
+static void UpdateDynamicFilters(float left_target_rpm, float right_target_rpm)
 {
-    left_wheel.dynamic_filter_us = CalculateDynamicEncoderFilterUs(target_rpm, LEFT_ENCODER_PPR);
-    right_wheel.dynamic_filter_us = CalculateDynamicEncoderFilterUs(target_rpm, RIGHT_ENCODER_PPR);
+    left_wheel.dynamic_filter_us = CalculateDynamicEncoderFilterUs(left_target_rpm, LEFT_ENCODER_PPR);
+    right_wheel.dynamic_filter_us = CalculateDynamicEncoderFilterUs(right_target_rpm, RIGHT_ENCODER_PPR);
+}
+
+static uint32_t CalculateEncoderMeasurementTimeoutUs(float target_rpm,
+                                                     uint32_t ppr,
+                                                     uint32_t last_valid_delta_us)
+{
+    float expected_interval_us = 0.0f;
+
+    if ((target_rpm >= 0.1f) && (ppr != 0U))
+    {
+        expected_interval_us = 60000000.0f / (target_rpm * (float)ppr);
+    }
+
+    if ((float)last_valid_delta_us > expected_interval_us)
+    {
+        expected_interval_us = (float)last_valid_delta_us;
+    }
+
+    float timeout_us = expected_interval_us * ENCODER_MEASUREMENT_TIMEOUT_FACTOR;
+    return (uint32_t)(ClampFloat(timeout_us,
+                                (float)ENCODER_MEASUREMENT_TIMEOUT_MIN_US,
+                                (float)ENCODER_MEASUREMENT_TIMEOUT_MAX_US) + 0.5f);
 }
 
 static float CalculateExponentialRamp(float start_val, float target_val, uint32_t elapsed_ms, uint32_t duration_ms)
@@ -284,31 +308,43 @@ static void UpdateAccelerationRamp(uint32_t now_tick)
     UpdateWheelAccelerationRamp(&left_wheel, now_tick);
     UpdateWheelAccelerationRamp(&right_wheel, now_tick);
 
-    UpdateDynamicFilters((left_wheel.target_rpm > right_wheel.target_rpm) ? left_wheel.target_rpm : right_wheel.target_rpm);
+    UpdateDynamicFilters(left_wheel.target_rpm, right_wheel.target_rpm);
 }
 
 /* Hassas Pulse Aralığı Tabanlı RPM Hesaplama Motoru[cite: 1] */
-static float CalculateRpmHighPrecision(WheelControl_t *wheel, uint32_t pulse_delta, uint32_t elapsed_ms, uint32_t ppr)
+static float CalculateRpmHighPrecision(WheelControl_t *wheel, uint32_t pulse_delta,
+                                       uint32_t ppr, float target_rpm)
 {
     if ((ppr == 0U) || (wheel == NULL)) return 0.0f;
 
     uint32_t delta_us = 0;
+    uint32_t last_encoder_us = 0;
+    uint32_t last_valid_delta_us = 0;
+    uint32_t now_us = __HAL_TIM_GET_COUNTER(&htim2);
     __disable_irq();
     delta_us = wheel->current_delta_us;
+    last_encoder_us = wheel->last_encoder_us;
+    last_valid_delta_us = wheel->last_valid_encoder_delta_us;
     __enable_irq();
 
     if ((pulse_delta == 0U) || (delta_us == 0U))
     {
-        wheel->zero_pulse_count++;
-        if (wheel->zero_pulse_count >= ENCODER_TIMEOUT_COUNTS)
+        uint32_t pulse_age_us = now_us - last_encoder_us;
+        uint32_t timeout_us = CalculateEncoderMeasurementTimeoutUs(target_rpm,
+                                                                   ppr,
+                                                                   last_valid_delta_us);
+
+        if (pulse_age_us >= timeout_us)
         {
-            wheel->zero_pulse_count = ENCODER_TIMEOUT_COUNTS;
+            wheel->measurement_timed_out = 1U;
             return 0.0f;
         }
-        return ((float)pulse_delta * 60000.0f) / ((float)ppr * (float)(elapsed_ms > 0 ? elapsed_ms : 1));
+
+        wheel->measurement_timed_out = 0U;
+        return wheel->measured_rpm;
     }
 
-    wheel->zero_pulse_count = 0U;
+    wheel->measurement_timed_out = 0U;
 
     float instant_rpm = 60000000.0f / ((float)delta_us * (float)ppr);
     return ClampFloat(instant_rpm, 0.0f, MAX_TARGET_RPM * 1.2f);
@@ -498,6 +534,8 @@ static void Encoder_Reset(uint8_t clear_statistics)
     right_wheel.previous_filtered_rpm = 0.0f;
     left_wheel.derivative_rpm_per_s = 0.0f;
     right_wheel.derivative_rpm_per_s = 0.0f;
+    left_wheel.measurement_timed_out = 0U;
+    right_wheel.measurement_timed_out = 0U;
     left_wheel.p_term = 0.0f;
     right_wheel.p_term = 0.0f;
     left_wheel.d_term = 0.0f;
@@ -561,7 +599,7 @@ void MotorControl_Init(void)
     if (HAL_TIM_PWM_Start(&htim3,  TIM_CHANNEL_1) != HAL_OK) Error_Handler();
 
     MotorDriver_Disable();
-    UpdateDynamicFilters(0.0f);
+    UpdateDynamicFilters(0.0f, 0.0f);
     Encoder_Reset(1U);
 }
 
@@ -778,7 +816,7 @@ static void ProcessPendingReversals(uint32_t now_tick)
 
     if (wheel_restarted != 0U)
     {
-        UpdateDynamicFilters((left_wheel.target_rpm > right_wheel.target_rpm) ? left_wheel.target_rpm : right_wheel.target_rpm);
+        UpdateDynamicFilters(left_wheel.target_rpm, right_wheel.target_rpm);
         last_control_tick = now_tick;
         MotorDriver_Enable();
         control_enabled = 1U;
@@ -807,7 +845,7 @@ void MotorControl_SetTargetRpm(float left_signed_rpm, float right_signed_rpm)
         last_control_tick = now_tick;
     }
 
-    UpdateDynamicFilters((left_wheel.target_rpm > right_wheel.target_rpm) ? left_wheel.target_rpm : right_wheel.target_rpm);
+    UpdateDynamicFilters(left_wheel.target_rpm, right_wheel.target_rpm);
     MotorDriver_Enable();
     control_enabled = 1U;
 }
@@ -838,9 +876,10 @@ static void CalculateWheelPID(WheelControl_t *wheel, uint32_t pulse_delta,
                               uint32_t elapsed_ms, uint32_t ppr, float dt,
                               float control_target_rpm)
 {
-    wheel->measured_rpm = CalculateRpmHighPrecision(wheel, pulse_delta, elapsed_ms, ppr);
+    wheel->measured_rpm = CalculateRpmHighPrecision(wheel, pulse_delta, ppr,
+                                                   control_target_rpm);
 
-    if (wheel->zero_pulse_count >= ENCODER_TIMEOUT_COUNTS)
+    if (wheel->measurement_timed_out != 0U)
     {
         wheel->filtered_rpm = 0.0f;
         wheel->previous_filtered_rpm = 0.0f;
@@ -1061,10 +1100,36 @@ uint8_t MotorControl_HasEncoderFault(void)
     if (control_enabled == 0U) return 0U;
 
     uint32_t now_us = __HAL_TIM_GET_COUNTER(&htim2);
+    float left_target_rpm = fabsf(left_target_rpm_command);
+    float right_target_rpm = fabsf(right_target_rpm_command);
+    uint32_t left_timeout_us = 500000U;
+    uint32_t right_timeout_us = 500000U;
+
+    if (left_target_rpm >= 0.1f)
+    {
+        float expected_interval_us = 60000000.0f /
+                                     (left_target_rpm * (float)LEFT_ENCODER_PPR);
+        left_timeout_us = (uint32_t)(ClampFloat(
+            2.5f * expected_interval_us, 500000.0f, 3000000.0f) + 0.5f);
+    }
+    if (right_target_rpm >= 0.1f)
+    {
+        float expected_interval_us = 60000000.0f /
+                                     (right_target_rpm * (float)RIGHT_ENCODER_PPR);
+        right_timeout_us = (uint32_t)(ClampFloat(
+            2.5f * expected_interval_us, 500000.0f, 3000000.0f) + 0.5f);
+    }
+
     uint8_t left_fault = (left_motor_direction != MOTOR_DIR_STOP) &&
-                         ((now_us - left_wheel.last_encoder_us) > 500000U);
+                         (left_wheel.ramp.stop_active == 0U) &&
+                         (left_wheel.reversal_pending == 0U) &&
+                         (left_target_rpm >= 0.1f) &&
+                         ((now_us - left_wheel.last_encoder_us) > left_timeout_us);
     uint8_t right_fault = (right_motor_direction != MOTOR_DIR_STOP) &&
-                          ((now_us - right_wheel.last_encoder_us) > 500000U);
+                          (right_wheel.ramp.stop_active == 0U) &&
+                          (right_wheel.reversal_pending == 0U) &&
+                          (right_target_rpm >= 0.1f) &&
+                          ((now_us - right_wheel.last_encoder_us) > right_timeout_us);
     return (left_fault || right_fault) ? 1U : 0U;
 }
 

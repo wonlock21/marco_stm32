@@ -1456,7 +1456,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : LOAD_DETECTED_Pin */
   GPIO_InitStruct.Pin = LOAD_DETECTED_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(LOAD_DETECTED_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PF7 PF6 PF8 */
@@ -1879,7 +1879,7 @@ void StartProtocolTask(void *argument)
           if (g_protocol.watchdog_triggered) status_flags |= STATUS_FLAG_WATCHDOG_TRIGGERED;
           if (MotorControl_WasCommandClamped()) status_flags |= STATUS_FLAG_CMD_CLAMPED;
           if (MotorControl_HasEncoderFault()) status_flags |= STATUS_FLAG_ENCODER_FAULT;
-          if (HAL_GPIO_ReadPin(LOAD_DETECTED_GPIO_Port, LOAD_DETECTED_Pin) == GPIO_PIN_SET)
+          if (HAL_GPIO_ReadPin(LOAD_DETECTED_GPIO_Port, LOAD_DETECTED_Pin) == GPIO_PIN_RESET)
           {
               status_flags |= STATUS_FLAG_LOAD_DETECTED;
           }
