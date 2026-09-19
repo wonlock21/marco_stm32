@@ -598,7 +598,9 @@ void MotorControl_Init(void)
     if (HAL_TIM_PWM_Start(&htim5,  TIM_CHANNEL_4) != HAL_OK) Error_Handler();
     if (HAL_TIM_PWM_Start(&htim3,  TIM_CHANNEL_1) != HAL_OK) Error_Handler();
 
-    MotorDriver_Disable();
+    MotorDriver_Enable();
+    LeftMotor_Apply(MOTOR_DIR_STOP, 0U);
+    RightMotor_Apply(MOTOR_DIR_STOP, 0U);
     UpdateDynamicFilters(0.0f, 0.0f);
     Encoder_Reset(1U);
 }
