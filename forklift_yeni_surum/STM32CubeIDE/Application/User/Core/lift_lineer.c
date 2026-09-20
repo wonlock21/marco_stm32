@@ -17,6 +17,7 @@ void LiftLineer_Init(void)
 {
     /* Başlangıçta sistemi kapalı tut */
     LiftLineer_Stop();
+    HAL_GPIO_WritePin(LIFT_EN_PORT, LIFT_EN_PIN, GPIO_PIN_SET);
 }
 
 void LiftLineer_Up(uint16_t pwm_value)
