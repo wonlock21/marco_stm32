@@ -308,6 +308,7 @@ int main(void)
   /* Call PreOsInit function */
   MX_TouchGFX_PreOSInit();
   /* USER CODE BEGIN 2 */
+  HAL_Delay(3000U);
   MotorControl_Init();
   LiftLineer_Init();
   EgimLineer_Init();
